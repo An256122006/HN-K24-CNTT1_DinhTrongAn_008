@@ -1,0 +1,48 @@
+Câu 1:
+Lỗi 1: Thất thoát tài chính và không đồng nhất dữ liệu do thiếu @Transactional.
+Lý do: Nếu gặp sự cố như đứt mạng, điện thoại hết pin hay lỗi hệ thống giữa chừng (ví dụ sau khi trừ tiền khách hàng thành công nhưng chưa cộng tiền cho tài xế hoặc chưa lưu trạng thái chuyến đi), hệ thống không thể rollback. Dẫn đến tiền bị trừ nhưng tài xế không nhận được và chuyến đi không được ghi nhận hoàn thành.
+
+Lỗi 2: Lỗ hổng bảo mật tin tưởng dữ liệu nhạy cảm từ Client (Client-Side Data Tampering) trong CompleteRideRequestDTO.
+Lý do: Các thuộc tính distanceInKm, surgeMultiplier, discountAmount nhận trực tiếp từ DTO của Client. Tài xế hoặc người dùng có thể can thiệp HTTP Request để sửa khoảng cách/hệ số nhân lên cao nhằm gian lận cước, hoặc tăng discountAmount để không tốn tiền (hoặc làm tổng tiền bị âm).
+
+Câu 2:
+xử lý lỗi 1: Thêm annotation @Transactional trên phương thức completeRide() để đảm bảo tất cả thao tác thành công hoặc rollback toàn bộ nếu có lỗi xảy ra.
+
+xử lý lỗi 2:
+- Không lấy giá trị khoảng cách, hệ số nhân và giảm giá từ DTO truyền lên nữa. Server sẽ tự tính toán khoảng cách và giá tiền an toàn dựa trên dữ liệu hệ thống.
+- Chuyển Field Injection thành Constructor Injection.
+
+Mã nguồn chi tiết:
+
+// RideService.java
+@Service
+@RequiredArgsConstructor
+public class RideService {
+    private final RideRepository rideRepository;
+    private final DriverWalletRepository driverWalletRepository;
+    private final RiderPaymentService riderPaymentService;
+    private final PricingService pricingService;
+
+    @Transactional
+    public Ride completeRide(CompleteRideRequestDTO request) {
+        Ride ride = rideRepository.findById(request.getRideId())
+                .orElseThrow(() -> new RuntimeException("Chuyến đi không tồn tại"));
+
+        double totalFare = pricingService.calculateTotalFare(ride);
+        riderPaymentService.chargeRider(ride.getRiderId(), totalFare);
+
+        double driverEarnings = totalFare * 0.8;
+
+        DriverWallet wallet = driverWalletRepository.findByDriverId(ride.getDriverId())
+                .orElseThrow(() -> new RuntimeException("Ví tài xế không tồn tại"));
+        wallet.setBalance(wallet.getBalance() + driverEarnings);
+        driverWalletRepository.save(wallet);
+
+        ride.setFare(totalFare);
+        ride.setStatus("COMPLETED");
+        return rideRepository.save(ride);
+    }
+}
+
+Câu 3:
+Chọn giải pháp 1 (Thêm @Transactional) vì lỗi này nguy hiểm nhất đến dòng tiền và tính đồng nhất dữ liệu. Nếu gặp sự cố mạng hay lỗi hệ thống giữa chừng, dữ liệu sẽ bị sai lệch hoàn toàn, gây thất thoát tài chính và không thể tự khôi phục dữ liệu nếu thiếu Transaction.
